@@ -1,0 +1,217 @@
+import 'package:flutter/material.dart';
+import 'views/home_page.dart';
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Gerenciador de Planetas',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      home: const HomePage(),
+    );
+  }
+}
+class Planeta {
+  int? id;
+  String nome;
+  double distancia;
+  double tamanho;
+  String? apelido;
+
+  Planeta({
+    this.id,
+    required this.nome,
+    required this.distancia,
+    required this.tamanho,
+    this.apelido,
+  });
+
+  factory Planeta.fromMap(Map<String, dynamic> map) {
+    return Planeta(
+      id: map['id'],
+      nome: map['nome'],
+      distancia: map['distancia'],
+      tamanho: map['tamanho'],
+      apelido: map['apelido'],
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'nome': nome,
+      'distancia': distancia,
+      'tamanho': tamanho,
+      'apelido': apelido,
+    };
+  }
+}
+import 'package:sqflite/sqflite.dart';
+import 'package:path/path.dart';
+import '../models/planeta.dart';
+
+class DatabaseHelper {
+  static final DatabaseHelper instance = DatabaseHelper._init();
+  static Database? _database;
+
+  DatabaseHelper._init();
+
+  Future<Database> get database async {
+    _database ??= await _initDB('planetas.db');
+    return _database!;
+  }
+
+  Future<Database> _initDB(String filePath) async {
+    final dbPath = await getDatabasesPath();
+    final path = join(dbPath, filePath);
+
+    return await openDatabase(path, version: 1, onCreate: _createDB);
+  }
+
+  Future _createDB(Database db, int version) async {
+    await db.execute('''
+      CREATE TABLE planetas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        distancia REAL NOT NULL,
+        tamanho REAL NOT NULL,
+        apelido TEXT
+      )
+    ''');
+  }
+
+  Future<int> insertPlaneta(Planeta planeta) async {
+    final db = await instance.database;
+    return await db.insert('planetas', planeta.toMap());
+  }
+
+  Future<List<Planeta>> getPlanetas() async {
+    final db = await instance.database;
+    final result = await db.query('planetas');
+    return result.map((e) => Planeta.fromMap(e)).toList();
+  }
+
+  Future<int> updatePlaneta(Planeta planeta) async {
+    final db = await instance.database;
+    return db.update('planetas', planeta.toMap(), where: 'id = ?', whereArgs: [planeta.id]);
+  }
+
+  Future<int> deletePlaneta(int id) async {
+    final db = await instance.database;
+    return db.delete('planetas', where: 'id = ?', whereArgs: [id]);
+  }
+}import '../models/planeta.dart';
+import '../db/database_helper.dart';
+
+class PlanetaController {
+  Future<List<Planeta>> listarPlanetas() => DatabaseHelper.instance.getPlanetas();
+
+  Future<void> adicionarPlaneta(Planeta planeta) async {
+    if (planeta.nome.isEmpty || planeta.distancia <= 0 || planeta.tamanho <= 0) {
+      throw Exception('Campos obrigatórios inválidos.');
+    }
+    await DatabaseHelper.instance.insertPlaneta(planeta);
+  }
+
+  Future<void> editarPlaneta(Planeta planeta) async {
+    await DatabaseHelper.instance.updatePlaneta(planeta);
+  }
+
+  Future<void> removerPlaneta(int id) async {
+    await DatabaseHelper.instance.deletePlaneta(id);
+  }
+}
+import 'package:flutter/material.dart';
+import '../controllers/planeta_controller.dart';
+import '../models/planeta.dart';
+import 'planeta_form.dart';
+import 'planeta_detail.dart';
+
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  final PlanetaController _controller = PlanetaController();
+  late Future<List<Planeta>> _listaPlanetas;
+
+  @override
+  void initState() {
+    super.initState();
+    _atualizarLista();
+  }
+
+  void _atualizarLista() {
+    setState(() {
+      _listaPlanetas = _controller.listarPlanetas();
+    });
+  }
+
+  void _confirmarExclusao(int id) async {
+    final confirm = await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirmação'),
+        content: const Text('Deseja excluir este planeta?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Excluir')),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await _controller.removerPlaneta(id);
+      _atualizarLista();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Planeta removido.')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Planetas')),
+      body: FutureBuilder<List<Planeta>>(
+        future: _listaPlanetas,
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          final planetas = snapshot.data!;
+          return ListView.builder(
+            itemCount: planetas.length,
+            itemBuilder: (context, index) {
+              final planeta = planetas[index];
+              return ListTile(
+                title: Text(planeta.nome),
+                subtitle: Text(planeta.apelido ?? ''),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => PlanetaDetail(planeta: planeta)),
+                ).then((_) => _atualizarLista()),
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete),
+                  onPressed: () => _confirmarExclusao(planeta.id!),
+                ),
+              );
+            },
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton(
+        child: const Icon(Icons.add),
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const PlanetaForm()),
+        ).then((_) => _atualizarLista()),
+      ),
+    );
+  }
+}
+
